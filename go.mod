@@ -31,6 +31,7 @@ require (
 	github.com/onsi/ginkgo/v2 v2.20.0
 	github.com/onsi/gomega v1.34.1
 	github.com/pivotal/kpack v0.15.0
+	github.com/rogpeppe/go-internal v1.12.0
 	github.com/satori/go.uuid v1.2.0
 	github.com/servicebinding/runtime v1.0.0
 	golang.org/x/exp v0.0.0-20240719175910-8a7402abbf56

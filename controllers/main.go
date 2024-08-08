@@ -332,6 +332,7 @@ func main() {
 			}
 			if err = controllers.NewBuildWorkloadReconciler(
 				mgr.GetClient(),
+				nil,
 				mgr.GetScheme(),
 				ctrl.Log.WithName("controllers").WithName("BuildWorkloadReconciler"),
 				controllerConfig,

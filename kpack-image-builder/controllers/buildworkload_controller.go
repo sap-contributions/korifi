@@ -46,11 +46,13 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 )
 
 const (
@@ -76,6 +78,7 @@ type RepositoryCreator interface {
 
 func NewBuildWorkloadReconciler(
 	c client.Client,
+	rc client.Client,
 	scheme *runtime.Scheme,
 	log logr.Logger,
 	config *config.ControllerConfig,
@@ -86,6 +89,7 @@ func NewBuildWorkloadReconciler(
 ) *k8s.PatchingReconciler[korifiv1alpha1.BuildWorkload, *korifiv1alpha1.BuildWorkload] {
 	buildWorkloadReconciler := BuildWorkloadReconciler{
 		k8sClient:               c,
+		remoteK8sClient:         rc,
 		scheme:                  scheme,
 		log:                     log,
 		controllerConfig:        config,
@@ -94,12 +98,18 @@ func NewBuildWorkloadReconciler(
 		imageRepoCreator:        imageRepoCreator,
 		builderReadinessTimeout: builderReadinessTimeout,
 	}
+
+	if rc == nil {
+		buildWorkloadReconciler.remoteK8sClient = c
+	}
+
 	return k8s.NewPatchingReconciler[korifiv1alpha1.BuildWorkload, *korifiv1alpha1.BuildWorkload](log, c, &buildWorkloadReconciler)
 }
 
 // BuildWorkloadReconciler reconciles a BuildWorkload object
 type BuildWorkloadReconciler struct {
 	k8sClient               client.Client
+	remoteK8sClient         client.Client
 	scheme                  *runtime.Scheme
 	log                     logr.Logger
 	controllerConfig        *config.ControllerConfig
@@ -112,15 +122,17 @@ type BuildWorkloadReconciler struct {
 func (r *BuildWorkloadReconciler) SetupWithManager(mgr ctrl.Manager) *builder.Builder {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&korifiv1alpha1.BuildWorkload{}).
-		Watches(
-			new(buildv1alpha2.Image),
-			handler.EnqueueRequestForOwner(r.scheme, mgr.GetRESTMapper(), &korifiv1alpha1.BuildWorkload{}),
-		).
-		Watches(
-			new(buildv1alpha2.Build),
-			handler.EnqueueRequestsFromMapFunc(r.buildWorkloadsFromBuild),
-		).
-		WithEventFilter(predicate.NewPredicateFuncs(filterBuildWorkloads))
+		WithEventFilter(predicate.NewPredicateFuncs(filterBuildWorkloads)).
+		WatchesRawSource(source.Kind[client.Object](r.managerCache(mgr), &buildv1alpha2.Image{}, handler.EnqueueRequestForOwner(r.scheme, mgr.GetRESTMapper(), &korifiv1alpha1.BuildWorkload{}))).
+		WatchesRawSource(source.Kind[client.Object](r.managerCache(mgr), &buildv1alpha2.Build{}, handler.EnqueueRequestsFromMapFunc(r.buildWorkloadsFromBuild)))
+}
+
+func (r *BuildWorkloadReconciler) managerCache(mgr ctrl.Manager) cache.Cache {
+	if r.remoteK8sClient == nil {
+		return mgr.GetCache()
+	}
+
+	return nil
 }
 
 func (r *BuildWorkloadReconciler) buildWorkloadsFromBuild(ctx context.Context, o client.Object) []reconcile.Request {
