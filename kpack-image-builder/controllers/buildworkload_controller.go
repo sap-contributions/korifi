@@ -128,7 +128,7 @@ func (r *BuildWorkloadReconciler) SetupWithManager(mgr ctrl.Manager) *builder.Bu
 }
 
 func (r *BuildWorkloadReconciler) managerCache(mgr ctrl.Manager) cache.Cache {
-	return mgr.GetCache() //TODO: Use kpackClient
+	return mgr.GetCache() //FIXME: Use kpackClient
 }
 
 func (r *BuildWorkloadReconciler) buildWorkloadsFromBuild(ctx context.Context, o client.Object) []reconcile.Request {

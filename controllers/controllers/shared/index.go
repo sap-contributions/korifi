@@ -78,10 +78,10 @@ func SetupIndexWithManager(mgr manager.Manager) error {
 		return err
 	}
 
-	err = mgr.GetFieldIndexer().IndexField(context.Background(), &korifiv1alpha1.CFServiceBroker{}, IndexServiceBrokerCredentialsSecretName, func(object client.Object) []string {
-		serviceBroker := object.(*korifiv1alpha1.CFServiceBroker)
-		return []string{serviceBroker.Spec.Credentials.Name}
-	})
+	// err = mgr.GetFieldIndexer().IndexField(context.Background(), &korifiv1alpha1.CFServiceBroker{}, IndexServiceBrokerCredentialsSecretName, func(object client.Object) []string {
+	// 	serviceBroker := object.(*korifiv1alpha1.CFServiceBroker)
+	// 	return []string{serviceBroker.Spec.Credentials.Name}
+	// })
 	if err != nil {
 		return err
 	}
