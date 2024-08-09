@@ -332,7 +332,7 @@ func main() {
 			}
 			if err = controllers.NewBuildWorkloadReconciler(
 				mgr.GetClient(),
-				nil,
+				nil, // FIXME: Create kpackClient from config/env
 				mgr.GetScheme(),
 				ctrl.Log.WithName("controllers").WithName("BuildWorkloadReconciler"),
 				controllerConfig,
