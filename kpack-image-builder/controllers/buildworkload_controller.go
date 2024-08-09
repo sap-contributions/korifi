@@ -89,7 +89,7 @@ func NewBuildWorkloadReconciler(
 ) *k8s.PatchingReconciler[korifiv1alpha1.BuildWorkload, *korifiv1alpha1.BuildWorkload] {
 	buildWorkloadReconciler := BuildWorkloadReconciler{
 		k8sClient:               c,
-		remoteK8sClient:         rc,
+		kpackClient:             rc,
 		scheme:                  scheme,
 		log:                     log,
 		controllerConfig:        config,
@@ -100,7 +100,7 @@ func NewBuildWorkloadReconciler(
 	}
 
 	if rc == nil {
-		buildWorkloadReconciler.remoteK8sClient = c
+		buildWorkloadReconciler.kpackClient = c
 	}
 
 	return k8s.NewPatchingReconciler[korifiv1alpha1.BuildWorkload, *korifiv1alpha1.BuildWorkload](log, c, &buildWorkloadReconciler)
@@ -109,7 +109,7 @@ func NewBuildWorkloadReconciler(
 // BuildWorkloadReconciler reconciles a BuildWorkload object
 type BuildWorkloadReconciler struct {
 	k8sClient               client.Client
-	remoteK8sClient         client.Client
+	kpackClient             client.Client
 	scheme                  *runtime.Scheme
 	log                     logr.Logger
 	controllerConfig        *config.ControllerConfig
@@ -128,11 +128,7 @@ func (r *BuildWorkloadReconciler) SetupWithManager(mgr ctrl.Manager) *builder.Bu
 }
 
 func (r *BuildWorkloadReconciler) managerCache(mgr ctrl.Manager) cache.Cache {
-	if r.remoteK8sClient == nil {
-		return mgr.GetCache()
-	}
-
-	return nil
+	return mgr.GetCache() //TODO: Use kpackClient
 }
 
 func (r *BuildWorkloadReconciler) buildWorkloadsFromBuild(ctx context.Context, o client.Object) []reconcile.Request {
@@ -201,7 +197,7 @@ func (r *BuildWorkloadReconciler) ReconcileResource(ctx context.Context, buildWo
 	}
 
 	kpackImage := new(buildv1alpha2.Image)
-	err := r.k8sClient.Get(ctx, client.ObjectKey{
+	err := r.kpackClient.Get(ctx, client.ObjectKey{
 		Namespace: buildWorkload.Namespace,
 		Name:      buildWorkload.Labels[korifiv1alpha1.CFAppGUIDLabelKey],
 	}, kpackImage)
@@ -315,11 +311,11 @@ func (r *BuildWorkloadReconciler) recoverIfBuildCreationHasBeenSkipped(ctx conte
 				Name:      kpackImage.Status.LatestBuildRef,
 			},
 		}
-		err = r.k8sClient.Get(ctx, client.ObjectKeyFromObject(latestKpackBuild), latestKpackBuild)
+		err = r.kpackClient.Get(ctx, client.ObjectKeyFromObject(latestKpackBuild), latestKpackBuild)
 		if err != nil {
 			return fmt.Errorf("failed to get latest kpack build %q: %w", kpackImage.Status.LatestBuildRef, err)
 		}
-		err = k8s.Patch(ctx, r.k8sClient, latestKpackBuild, func() {
+		err = k8s.Patch(ctx, r.kpackClient, latestKpackBuild, func() {
 			if latestKpackBuild.Annotations == nil {
 				latestKpackBuild.Annotations = map[string]string{}
 			}
@@ -339,7 +335,7 @@ func (r *BuildWorkloadReconciler) getBuilderReadyCondition(ctx context.Context, 
 	switch kpackImage.Spec.Builder.Kind {
 	case "ClusterBuilder":
 		var imageBuilder buildv1alpha2.ClusterBuilder
-		err := r.k8sClient.Get(ctx, client.ObjectKey{Name: kpackImage.Spec.Builder.Name}, &imageBuilder)
+		err := r.kpackClient.Get(ctx, client.ObjectKey{Name: kpackImage.Spec.Builder.Name}, &imageBuilder)
 		if err != nil {
 			if k8serrors.IsNotFound(err) {
 				log.Info("failing build as cluster builder is not found", "reason", err)
@@ -360,7 +356,7 @@ func (r *BuildWorkloadReconciler) getBuilderReadyCondition(ctx context.Context, 
 
 	case "Builder":
 		var imageBuilder buildv1alpha2.Builder
-		err := r.k8sClient.Get(ctx, client.ObjectKey{Name: kpackImage.Spec.Builder.Name, Namespace: buildWorkload.Namespace}, &imageBuilder)
+		err := r.kpackClient.Get(ctx, client.ObjectKey{Name: kpackImage.Spec.Builder.Name, Namespace: buildWorkload.Namespace}, &imageBuilder)
 		if err != nil {
 			if k8serrors.IsNotFound(err) {
 				log.Info("failing build as builder is not found", "reason", err)
@@ -388,7 +384,7 @@ func (r *BuildWorkloadReconciler) getBuilderReadyCondition(ctx context.Context, 
 
 func (r *BuildWorkloadReconciler) getDefaultClusterBuilder(ctx context.Context) (*buildv1alpha2.ClusterBuilder, error) {
 	var defaultBuilder buildv1alpha2.ClusterBuilder
-	err := r.k8sClient.Get(ctx, client.ObjectKey{Name: r.controllerConfig.ClusterBuilderName}, &defaultBuilder)
+	err := r.kpackClient.Get(ctx, client.ObjectKey{Name: r.controllerConfig.ClusterBuilderName}, &defaultBuilder)
 	return &defaultBuilder, err
 }
 
@@ -465,7 +461,8 @@ func (r *BuildWorkloadReconciler) ensureKpackBuilderForBuildpacks(ctx context.Co
 			Namespace: buildWorkload.Namespace,
 		},
 	}
-	_, err = ctrl.CreateOrUpdate(ctx, r.k8sClient, builder, func() error {
+	_, err = ctrl.CreateOrUpdate(ctx, r.kpackClient, builder, func() error {
+		// TODO: SetOwnerReference for remote?
 		if err = controllerutil.SetOwnerReference(buildWorkload, builder, r.scheme); err != nil {
 			log.Info("unable to set owner reference on Builder", "reason", err)
 			return err
@@ -584,7 +581,7 @@ func hasCompleted(buildWorkload *korifiv1alpha1.BuildWorkload) bool {
 
 func (r *BuildWorkloadReconciler) listKpackBuilds(ctx context.Context, buildWorkload *korifiv1alpha1.BuildWorkload) ([]buildv1alpha2.Build, error) {
 	var kpackBuildList buildv1alpha2.BuildList
-	err := r.k8sClient.List(ctx, &kpackBuildList, client.InNamespace(buildWorkload.Namespace), client.MatchingLabels{
+	err := r.kpackClient.List(ctx, &kpackBuildList, client.InNamespace(buildWorkload.Namespace), client.MatchingLabels{
 		buildv1alpha2.ImageLabel:           buildWorkload.Labels[korifiv1alpha1.CFAppGUIDLabelKey],
 		buildv1alpha2.ImageGenerationLabel: buildWorkload.Labels[ImageGenerationKey],
 	})
@@ -641,6 +638,7 @@ func (r *BuildWorkloadReconciler) beginImageBuild(ctx context.Context, log logr.
 	return ctrl.Result{}, r.reconcileKpackImage(ctx, log, buildWorkload, builderName)
 }
 
+// TODO: needed for the kpackClient
 func (r *BuildWorkloadReconciler) ensureRegistryImagePullSecretsExist(ctx context.Context, buildWorkload *korifiv1alpha1.BuildWorkload) error {
 	for _, secret := range buildWorkload.Spec.Source.Registry.ImagePullSecrets {
 		err := r.k8sClient.Get(ctx, types.NamespacedName{Namespace: buildWorkload.Namespace, Name: secret.Name}, &corev1.Secret{})
@@ -680,7 +678,7 @@ func (r *BuildWorkloadReconciler) reconcileKpackImage(
 	}
 
 	recreateImage := false
-	_, err = controllerutil.CreateOrPatch(ctx, r.k8sClient, &desiredKpackImage, func() error {
+	_, err = controllerutil.CreateOrPatch(ctx, r.kpackClient, &desiredKpackImage, func() error {
 		if desiredKpackImage.Spec.Cache != nil &&
 			desiredKpackImage.Spec.Cache.Volume != nil &&
 			desiredKpackImage.Spec.Cache.Volume.Size != nil &&
@@ -754,7 +752,7 @@ func (r *BuildWorkloadReconciler) reconcileKpackImage(
 	if recreateImage {
 		// note: we don't need to explicitly requeue because we have a watch on the Image, so deleting it will trigger a requeue of its owner
 		log.V(1).Info("removing kpack image and re-reconciling", "imageName", desiredKpackImage.Name, "imageNamespace", desiredKpackImage.Namespace)
-		err = r.k8sClient.Delete(ctx, &desiredKpackImage)
+		err = r.kpackClient.Delete(ctx, &desiredKpackImage)
 		if err != nil {
 			log.Info("failed to delete kpack image on cache resize", "reason", err)
 			return err
@@ -793,7 +791,7 @@ func GetBuildResources(diskMB, memoryMB int64) corev1.ResourceRequirements {
 
 func (r *BuildWorkloadReconciler) isResizable(ctx context.Context, log logr.Logger, scName string) (bool, error) {
 	scList := storagev1.StorageClassList{}
-	if listErr := r.k8sClient.List(ctx, &scList); listErr != nil {
+	if listErr := r.kpackClient.List(ctx, &scList); listErr != nil {
 		log.Info("unable to list storage classes", "reason", listErr)
 		return false, listErr
 	}
@@ -919,7 +917,7 @@ func (r *BuildWorkloadReconciler) isLastBuildWorkload(ctx context.Context, build
 }
 
 func (r *BuildWorkloadReconciler) deleteBuildsForBuildWorkload(ctx context.Context, buildWorkload *korifiv1alpha1.BuildWorkload) error {
-	err := r.k8sClient.DeleteAllOf(ctx, new(buildv1alpha2.Build), client.InNamespace(buildWorkload.Namespace), client.MatchingLabels{
+	err := r.kpackClient.DeleteAllOf(ctx, new(buildv1alpha2.Build), client.InNamespace(buildWorkload.Namespace), client.MatchingLabels{
 		buildv1alpha2.ImageLabel:           buildWorkload.Labels[korifiv1alpha1.CFAppGUIDLabelKey],
 		buildv1alpha2.ImageGenerationLabel: buildWorkload.Labels[ImageGenerationKey],
 	})
@@ -931,7 +929,7 @@ func (r *BuildWorkloadReconciler) deleteBuildsForBuildWorkload(ctx context.Conte
 
 func (r *BuildWorkloadReconciler) hasRemainingBuilds(ctx context.Context, buildWorkload *korifiv1alpha1.BuildWorkload) (bool, error) {
 	buildList := &buildv1alpha2.BuildList{}
-	if err := r.k8sClient.List(ctx, buildList, client.InNamespace(buildWorkload.Namespace), client.MatchingLabels{
+	if err := r.kpackClient.List(ctx, buildList, client.InNamespace(buildWorkload.Namespace), client.MatchingLabels{
 		buildv1alpha2.ImageLabel:           buildWorkload.Labels[korifiv1alpha1.CFAppGUIDLabelKey],
 		buildv1alpha2.ImageGenerationLabel: buildWorkload.Labels[ImageGenerationKey],
 	}); err != nil {
