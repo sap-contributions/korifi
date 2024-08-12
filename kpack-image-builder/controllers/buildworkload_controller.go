@@ -42,6 +42,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -78,7 +79,9 @@ type RepositoryCreator interface {
 
 func NewBuildWorkloadReconciler(
 	c client.Client,
-	rc client.Client,
+	kpackClient client.Client,
+	kpackCache cache.Cache,
+	kpackMapper meta.RESTMapper,
 	scheme *runtime.Scheme,
 	log logr.Logger,
 	config *config.ControllerConfig,
@@ -89,7 +92,9 @@ func NewBuildWorkloadReconciler(
 ) *k8s.PatchingReconciler[korifiv1alpha1.BuildWorkload, *korifiv1alpha1.BuildWorkload] {
 	buildWorkloadReconciler := BuildWorkloadReconciler{
 		k8sClient:               c,
-		kpackClient:             rc,
+		kpackClient:             kpackClient,
+		kpackCache:              kpackCache,
+		kpackMapper:             kpackMapper,
 		scheme:                  scheme,
 		log:                     log,
 		controllerConfig:        config,
@@ -99,10 +104,6 @@ func NewBuildWorkloadReconciler(
 		builderReadinessTimeout: builderReadinessTimeout,
 	}
 
-	if rc == nil {
-		buildWorkloadReconciler.kpackClient = c
-	}
-
 	return k8s.NewPatchingReconciler[korifiv1alpha1.BuildWorkload, *korifiv1alpha1.BuildWorkload](log, c, &buildWorkloadReconciler)
 }
 
@@ -110,6 +111,8 @@ func NewBuildWorkloadReconciler(
 type BuildWorkloadReconciler struct {
 	k8sClient               client.Client
 	kpackClient             client.Client
+	kpackCache              cache.Cache
+	kpackMapper             meta.RESTMapper
 	scheme                  *runtime.Scheme
 	log                     logr.Logger
 	controllerConfig        *config.ControllerConfig
@@ -123,12 +126,8 @@ func (r *BuildWorkloadReconciler) SetupWithManager(mgr ctrl.Manager) *builder.Bu
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&korifiv1alpha1.BuildWorkload{}).
 		WithEventFilter(predicate.NewPredicateFuncs(filterBuildWorkloads)).
-		WatchesRawSource(source.Kind[client.Object](r.managerCache(mgr), &buildv1alpha2.Image{}, handler.EnqueueRequestForOwner(r.scheme, mgr.GetRESTMapper(), &korifiv1alpha1.BuildWorkload{}))).
-		WatchesRawSource(source.Kind[client.Object](r.managerCache(mgr), &buildv1alpha2.Build{}, handler.EnqueueRequestsFromMapFunc(r.buildWorkloadsFromBuild)))
-}
-
-func (r *BuildWorkloadReconciler) managerCache(mgr ctrl.Manager) cache.Cache {
-	return mgr.GetCache() //FIXME: Use kpackClient
+		WatchesRawSource(source.Kind[client.Object](r.kpackCache, &buildv1alpha2.Image{}, handler.EnqueueRequestForOwner(r.scheme, mgr.GetRESTMapper(), &korifiv1alpha1.BuildWorkload{}))).
+		WatchesRawSource(source.Kind[client.Object](r.kpackCache, &buildv1alpha2.Build{}, handler.EnqueueRequestsFromMapFunc(r.buildWorkloadsFromBuild)))
 }
 
 func (r *BuildWorkloadReconciler) buildWorkloadsFromBuild(ctx context.Context, o client.Object) []reconcile.Request {
@@ -499,7 +498,7 @@ func ComputeBuilderName(bps []string) string {
 	return uuid.NewSHA1(uuid.Nil, []byte(strings.Join(bps, "\x00"))).String()
 }
 
-func (r *BuildWorkloadReconciler) checkBuildpacks(ctx context.Context, buildWorkload *korifiv1alpha1.BuildWorkload, defaultBuilder *buildv1alpha2.ClusterBuilder) error {
+func (r *BuildWorkloadReconciler) checkBuildpacks(_ context.Context, buildWorkload *korifiv1alpha1.BuildWorkload, defaultBuilder *buildv1alpha2.ClusterBuilder) error {
 	validIDs := map[string]bool{}
 	for _, bp := range clusterBuilderToBuildpacks(defaultBuilder, metav1.Now()) {
 		validIDs[bp.Name] = true
@@ -635,6 +634,12 @@ func (r *BuildWorkloadReconciler) beginImageBuild(ctx context.Context, log logr.
 		return ctrl.Result{}, err
 	}
 
+	err = r.ensureNamespaceInKpackCluster(ctx, buildWorkload)
+	if err != nil {
+		log.Info("kpack namespace not created", "namespace", buildWorkload.GetNamespace(), "reason", err)
+		return ctrl.Result{}, err
+	}
+
 	return ctrl.Result{}, r.reconcileKpackImage(ctx, log, buildWorkload, builderName)
 }
 
@@ -646,6 +651,64 @@ func (r *BuildWorkloadReconciler) ensureRegistryImagePullSecretsExist(ctx contex
 			return err
 		}
 	}
+
+	return nil
+}
+
+func (r *BuildWorkloadReconciler) ensureNamespaceInKpackCluster(ctx context.Context, buildWorkload *korifiv1alpha1.BuildWorkload) error {
+	namespace := buildWorkload.GetNamespace()
+	spaceNamespace := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: namespace,
+		},
+	}
+	res, err := controllerutil.CreateOrPatch(ctx, r.kpackClient, spaceNamespace, nil)
+	if err != nil {
+		return err
+	}
+	r.log.Info("namespace reconciled", "namespace", namespace, "result", res)
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: namespace,
+			Name:      "image-registry-credentials",
+		},
+		Type: corev1.SecretTypeDockerConfigJson,
+	}
+	res, err = controllerutil.CreateOrPatch(ctx, r.kpackClient, secret, func() error {
+		originalSecret := new(corev1.Secret)
+		err = r.k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: "image-registry-credentials"}, originalSecret)
+		if err != nil {
+			return err
+		}
+
+		secret.Data = originalSecret.Data
+
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	r.log.Info("secret reconciled", "namespace", namespace, "name", "image-registry-credentials", "result", res)
+
+	res, err = controllerutil.CreateOrPatch(ctx, r.kpackClient, &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: namespace,
+			Name:      "kpack-service-account",
+		},
+		Secrets:          []corev1.ObjectReference{{Name: "image-registry-credentials"}},
+		ImagePullSecrets: []corev1.LocalObjectReference{{Name: "image-registry-credentials"}},
+	}, nil)
+	if err != nil {
+		return err
+	}
+	r.log.Info("service account reconciled", "namespace", namespace, "name", "kpack-service-account", "result", res)
+
+	err = r.ensureEnvSecrets(ctx, namespace, buildWorkload.Spec.Env)
+	if err != nil {
+		return err
+	}
+	r.log.Info("env reconciled", "namespace", namespace, "name", buildWorkload.Name)
 
 	return nil
 }
@@ -770,6 +833,38 @@ func (r *BuildWorkloadReconciler) reconcileKpackImage(
 
 	buildWorkload.Labels[ImageGenerationKey] = strconv.FormatInt(desiredKpackImage.Generation, 10)
 
+	return nil
+}
+
+func (r *BuildWorkloadReconciler) ensureEnvSecrets(ctx context.Context, namespace string, env []corev1.EnvVar) error {
+	for _, e := range env {
+		if e.ValueFrom != nil && e.ValueFrom.SecretKeyRef != nil {
+			secretRef := e.ValueFrom.SecretKeyRef
+			s := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      secretRef.Name,
+					Namespace: namespace,
+				},
+			}
+			res, err := controllerutil.CreateOrPatch(ctx, r.kpackClient, s, func() error {
+				originalSecret := new(corev1.Secret)
+				if err := r.k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: secretRef.Name}, originalSecret, nil); err != nil {
+					return err
+				}
+
+				s.Data = originalSecret.Data
+				s.Type = originalSecret.Type
+				s.Immutable = originalSecret.Immutable
+
+				return nil
+			})
+			if err != nil {
+				return err
+			}
+
+			r.log.Info("ensured secret", "namespace", namespace, "name", s.GetName(), "result", res)
+		}
+	}
 	return nil
 }
 

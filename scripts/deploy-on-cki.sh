@@ -189,9 +189,21 @@ function deploy_korifi() {
 
     echo "No deploying korifi..."
     
-    docker images | grep "korifi-controllers"
+    IMAGE=$(docker images | grep "korifi-controllers" | head -n1 | awk '{print $3}')
+    TARGET="europe-west3-docker.pkg.dev/sap-se-gcp-istio-dev/public/korifi/korifi-controllers:latest"
 
-    echo "docker push to europe-west3-docker.pkg.dev/sap-se-gcp-istio-dev/public/korifi/korifi-controllers:latest"
+    echo
+    echo "docker tag $IMAGE"  
+    echo
+    docker tag $IMAGE $TARGET
+    echo
+    echo "docker push $TARGET"
+    echo
+    docker push $TARGET
+    echo
+    echo "restarting pod"
+    echo
+    kubectl delete pod -n korifi -l "app=korifi-controllers"
   }
   popd >/dev/null
 }

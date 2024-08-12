@@ -74,10 +74,12 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	k8sclient "k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog/v2"
 	admission "k8s.io/pod-security-admission/api"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/cluster"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
@@ -90,12 +92,15 @@ import (
 )
 
 var (
-	scheme   = runtime.NewScheme()
-	setupLog = ctrl.Log.WithName("setup")
+	scheme      = runtime.NewScheme()
+	kpackScheme = runtime.NewScheme()
+	setupLog    = ctrl.Log.WithName("setup")
 )
 
 func init() {
+	utilruntime.Must(buildv1alpha2.AddToScheme(kpackScheme))
 	utilruntime.Must(buildv1alpha2.AddToScheme(scheme))
+	utilruntime.Must(clientgoscheme.AddToScheme(kpackScheme))
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(gatewayv1beta1.Install(scheme))
 	utilruntime.Must(korifiv1alpha1.AddToScheme(scheme))
@@ -113,12 +118,15 @@ func main() {
 	var metricsAddr string
 	var enableLeaderElection bool
 	var probeAddr string
+	var kpackKubeconfig string
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
+	flag.StringVar(&kpackKubeconfig, "kpack-kubeconfig", "", "Path to a Kpack kubeconfig")
+	flag.Parse()
 
 	configPath, found := os.LookupEnv("CONTROLLERSCONFIG")
 	if !found {
@@ -324,6 +332,37 @@ func main() {
 		}
 
 		if controllerConfig.IncludeKpackImageBuilder {
+			kpackK8sClient := mgr.GetClient()
+			kpackK8sCache := mgr.GetCache()
+			kpackRESTMapper := mgr.GetRESTMapper()
+			ctrl.Log.Info("using remote config", "name", kpackKubeconfig)
+			kpackLogger := ctrl.Log.WithName("kpack-test").V(10)
+			kpackLogger.Info("using remote config", "name", kpackKubeconfig)
+			if kpackKubeconfig != "" {
+				kpackLogger.Info("creating remote kpack client", "kubeconfig", kpackKubeconfig)
+				kpackConf, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(&clientcmd.ClientConfigLoadingRules{ExplicitPath: kpackKubeconfig}, nil).ClientConfig()
+				if err != nil {
+					setupLog.Error(err, "unable to initialize kpack cluster config")
+					os.Exit(1)
+				}
+
+				kpackLogger.Info("creating kpack cluster object", "server", kpackConf.String())
+				kpackCluster, err := cluster.New(kpackConf, func(o *cluster.Options) {
+					o.Scheme = kpackScheme
+					o.Logger = kpackLogger
+				})
+				if err != nil {
+					setupLog.Error(err, "unable to initialize kpack cluster")
+					os.Exit(1)
+				}
+
+				kpackK8sCache = kpackCluster.GetCache()
+				kpackK8sClient = kpackCluster.GetClient()
+				kpackRESTMapper = kpackCluster.GetRESTMapper()
+
+				mgr.Add(kpackCluster)
+			}
+
 			var builderReadinessTimeout time.Duration
 			builderReadinessTimeout, err = controllerConfig.ParseBuilderReadinessTimeout()
 			if err != nil {
@@ -332,7 +371,9 @@ func main() {
 			}
 			if err = controllers.NewBuildWorkloadReconciler(
 				mgr.GetClient(),
-				nil, // FIXME: Create kpackClient from config/env
+				kpackK8sClient,
+				kpackK8sCache,
+				kpackRESTMapper,
 				mgr.GetScheme(),
 				ctrl.Log.WithName("controllers").WithName("BuildWorkloadReconciler"),
 				controllerConfig,
@@ -357,7 +398,7 @@ func main() {
 			}
 
 			if err = controllers.NewKpackBuildController(
-				mgr.GetClient(),
+				kpackK8sClient,
 				ctrl.Log.WithName("kpack-image-builder").WithName("KpackBuild"),
 				imageClient,
 				controllerConfig.BuilderServiceAccount,

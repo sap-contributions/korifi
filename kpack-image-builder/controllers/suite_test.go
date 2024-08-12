@@ -121,6 +121,9 @@ var _ = BeforeSuite(func() {
 	fakeImageConfigGetter = new(fake.ImageConfigGetter)
 	buildWorkloadReconciler = controllers.NewBuildWorkloadReconciler(
 		k8sManager.GetClient(),
+		nil,
+		nil, // FIXME
+		nil,
 		k8sManager.GetScheme(),
 		ctrl.Log.WithName("kpack-image-builder").WithName("BuildWorkload"),
 		controllerConfig,

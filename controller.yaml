@@ -1,12 +1,14 @@
+---
+# Source: korifi/templates/components.yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   labels:
     app: korifi-controllers
   name: korifi-controllers-controller-manager
-  namespace: {{ .Release.Namespace }}
+  namespace: korifi
 spec:
-  replicas: {{ .Values.controllers.replicas | default 1}}
+  replicas: 1
   selector:
     matchLabels:
       app: korifi-controllers
@@ -17,7 +19,7 @@ spec:
         prometheus.io/path: /metrics
         prometheus.io/port: "8080"
         prometheus.io/scrape: "true"
-        checksum/config: {{ tpl ($.Files.Get "controllers/configmap.yaml") $ | sha256sum }}
+        checksum/config: 31eaf8281c416a9450edf722ef7c938c5047a6c17912b11873c7879c9845a791
       labels:
         app: korifi-controllers
     spec:
@@ -27,27 +29,11 @@ spec:
         - name: CONTROLLERSCONFIG
           value: /etc/korifi-controllers-config
         image: "europe-west3-docker.pkg.dev/sap-se-gcp-istio-dev/public/korifi/korifi-controllers:latest"
-{{- if .Values.debug }}
-        command:
-        - "/dlv"
-        args:
-        - "--listen=:40000"
-        - "--headless=true"
-        - "--api-version=2"
-        - "exec"
-        - "/manager"
-        - "--continue"
-        - "--accept-multiclient"
-        - "--"
-        - "--health-probe-bind-address=:8081"
-        - "--leader-elect"
-{{- else }}
         args:
         - --health-probe-bind-address=:8081
         - --leader-elect
-{{- end }}
-        - --kpack-kubeconfig
-        - /etc/kpack-remote-config/kubeconfig
+        - "--kpack-kubeconfig"
+        - "/etc/kpack-remote-config/kubeconfig"
         livenessProbe:
           httpGet:
             path: /healthz
@@ -66,9 +52,15 @@ spec:
             path: /readyz
             port: 8081
           initialDelaySeconds: 5
-          periodSeconds: 10
-        {{- include "korifi.resources" . | indent 8 }}
-        {{- include "korifi.securityContext" . | indent 8 }}
+          periodSeconds: 10                
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          runAsNonRoot: true
+          seccompProfile:
+            type: RuntimeDefault
         volumeMounts:
         - mountPath: /tmp/k8s-webhook-server/serving-certs
           name: cert
@@ -78,17 +70,12 @@ spec:
           readOnly: true
         - mountPath: /etc/kpack-remote-config
           name: remote-config
-          readOnly: true
-      {{- include "korifi.podSecurityContext" . | indent 6 }}
+          readOnly: true      
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       serviceAccountName: korifi-controllers-controller-manager
-{{- if .Values.controllers.nodeSelector }}
-      nodeSelector:
-      {{ toYaml .Values.controllers.nodeSelector | indent 8 }}
-{{- end }}
-{{- if .Values.controllers.tolerations }}
-      tolerations:
-      {{- toYaml .Values.controllers.tolerations | nindent 8 }}
-{{- end }}
       terminationGracePeriodSeconds: 10
       volumes:
       - name: cert
