@@ -24,16 +24,19 @@ import (
 
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 )
 
 const (
@@ -78,7 +81,10 @@ type WorkloadToStatefulsetConverter interface {
 
 // AppWorkloadReconciler reconciles a AppWorkload object
 type AppWorkloadReconciler struct {
-	k8sClient        client.Client
+	remoteClient     client.Client
+	localClient      client.Client
+	localCache       cache.Cache
+	localMapper      meta.RESTMapper
 	scheme           *runtime.Scheme
 	workloadsToStSet WorkloadToStatefulsetConverter
 	pdb              PDB
@@ -86,46 +92,33 @@ type AppWorkloadReconciler struct {
 }
 
 func NewAppWorkloadReconciler(
-	c client.Client,
+	remoteClient client.Client,
+	localClient client.Client,
+	localCache cache.Cache,
+	localMapper meta.RESTMapper,
 	scheme *runtime.Scheme,
 	workloadsToStSet WorkloadToStatefulsetConverter,
 	pdb PDB,
 	log logr.Logger,
 ) *k8s.PatchingReconciler[korifiv1alpha1.AppWorkload, *korifiv1alpha1.AppWorkload] {
 	appWorkloadReconciler := AppWorkloadReconciler{
-		k8sClient:        c,
+		remoteClient:     remoteClient,
+		localClient:      localClient,
+		localCache:       localCache,
+		localMapper:      localMapper,
 		scheme:           scheme,
 		workloadsToStSet: workloadsToStSet,
 		pdb:              pdb,
 		log:              log,
 	}
-	return k8s.NewPatchingReconciler[korifiv1alpha1.AppWorkload, *korifiv1alpha1.AppWorkload](log, c, &appWorkloadReconciler)
+	return k8s.NewPatchingReconciler[korifiv1alpha1.AppWorkload, *korifiv1alpha1.AppWorkload](log, remoteClient, &appWorkloadReconciler)
 }
 
 func (r *AppWorkloadReconciler) SetupWithManager(mgr ctrl.Manager) *builder.Builder {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&korifiv1alpha1.AppWorkload{}).
-		Owns(&appsv1.StatefulSet{}).
-		Watches(
-			new(appsv1.StatefulSet),
-			handler.EnqueueRequestsFromMapFunc(r.enqueueAppWorkloadRequests),
-		).
+		WatchesRawSource(source.Kind[client.Object](r.localCache, &appsv1.StatefulSet{}, handler.EnqueueRequestForOwner(r.scheme, mgr.GetRESTMapper(), &korifiv1alpha1.AppWorkload{}))).
 		WithEventFilter(predicate.NewPredicateFuncs(filterAppWorkloads))
-}
-
-func (r *AppWorkloadReconciler) enqueueAppWorkloadRequests(ctx context.Context, o client.Object) []reconcile.Request {
-	var requests []reconcile.Request
-
-	if appWorkloadName, ok := o.GetLabels()[LabelAppWorkloadGUID]; ok {
-		requests = append(requests, reconcile.Request{
-			NamespacedName: types.NamespacedName{
-				Name:      appWorkloadName,
-				Namespace: o.GetNamespace(),
-			},
-		})
-	}
-
-	return requests
 }
 
 func filterAppWorkloads(object client.Object) bool {
@@ -158,13 +151,28 @@ func (r *AppWorkloadReconciler) ReconcileResource(ctx context.Context, appWorklo
 		return ctrl.Result{}, err
 	}
 
+	if err := r.ensureNamespace(ctx, appWorkload.GetNamespace()); err != nil {
+		log.Info("error when creating namespace", "reason", err)
+		return ctrl.Result{}, err
+	}
+
+	if err := r.ensureServiceAccount(ctx, appWorkload.GetNamespace(), ServiceAccountName); err != nil {
+		log.Info("error when creating service account", "reason", err)
+		return ctrl.Result{}, err
+	}
+
+	if err := r.synchronizeSecrets(ctx, appWorkload); err != nil {
+		log.Info("failed to synchronize secrets", "reason", err)
+		return ctrl.Result{}, err
+	}
+
 	createdStSet := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      statefulSet.Name,
 			Namespace: statefulSet.Namespace,
 		},
 	}
-	_, err = controllerutil.CreateOrPatch(ctx, r.k8sClient, createdStSet, func() error {
+	_, err = controllerutil.CreateOrPatch(ctx, r.localClient, createdStSet, func() error {
 		createdStSet.Labels = statefulSet.Labels
 		createdStSet.Annotations = statefulSet.Annotations
 		createdStSet.OwnerReferences = statefulSet.OwnerReferences
@@ -186,4 +194,100 @@ func (r *AppWorkloadReconciler) ReconcileResource(ctx context.Context, appWorklo
 	appWorkload.Status.ActualInstances = createdStSet.Status.Replicas
 
 	return ctrl.Result{}, nil
+}
+
+func (r *AppWorkloadReconciler) ensureServiceAccount(ctx context.Context, namespace, name string) error {
+	res, err := controllerutil.CreateOrPatch(ctx, r.localClient, &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+			Annotations: map[string]string{
+				"cloudfoundry.org/propagate-service-account": "true",
+				"cloudfoundry.org/propagate-deletion":        "false",
+			},
+		},
+	}, nil)
+	if err != nil {
+		return err
+	}
+	r.log.Info("cf-space namespace reconciled", "name", name, "result", res)
+
+	return nil
+}
+
+func (r *AppWorkloadReconciler) ensureNamespace(ctx context.Context, name string) error {
+	res, err := controllerutil.CreateOrPatch(ctx, r.localClient, &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+		},
+	}, nil)
+	if err != nil {
+		return err
+	}
+	r.log.Info("cf-space namespace reconciled", "name", name, "result", res)
+
+	return nil
+}
+
+func (r *AppWorkloadReconciler) synchronizeSecrets(ctx context.Context, appWorkload *korifiv1alpha1.AppWorkload) error {
+	for _, s := range appWorkload.Spec.ImagePullSecrets {
+		secret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: appWorkload.GetNamespace(),
+				Name:      s.Name,
+			},
+			Type: corev1.SecretTypeDockerConfigJson,
+		}
+
+		res, err := controllerutil.CreateOrPatch(ctx, r.localClient, secret, func() error {
+			originalSecret := new(corev1.Secret)
+			err := r.remoteClient.Get(ctx, types.NamespacedName{Namespace: appWorkload.GetNamespace(), Name: s.Name}, originalSecret)
+			if err != nil {
+				return err
+			}
+
+			secret.Data = originalSecret.Data
+
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+
+		r.log.Info("secret reconciled", "namespace", appWorkload.GetNamespace(), "name", s.Name, "result", res)
+	}
+
+	return r.ensureEnvSecrets(ctx, appWorkload.GetNamespace(), appWorkload.Spec.Env)
+}
+
+func (r *AppWorkloadReconciler) ensureEnvSecrets(ctx context.Context, namespace string, env []corev1.EnvVar) error {
+	for _, e := range env {
+		if e.ValueFrom != nil && e.ValueFrom.SecretKeyRef != nil {
+			secretRef := e.ValueFrom.SecretKeyRef
+			s := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      secretRef.Name,
+					Namespace: namespace,
+				},
+			}
+			res, err := controllerutil.CreateOrPatch(ctx, r.localClient, s, func() error {
+				originalSecret := new(corev1.Secret)
+				if err := r.remoteClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: secretRef.Name}, originalSecret, nil); err != nil {
+					return err
+				}
+
+				s.Data = originalSecret.Data
+				s.Type = originalSecret.Type
+				s.Immutable = originalSecret.Immutable
+
+				return nil
+			})
+			if err != nil {
+				return err
+			}
+
+			r.log.Info("ensured secret", "namespace", namespace, "name", s.GetName(), "result", res)
+		}
+	}
+	return nil
 }

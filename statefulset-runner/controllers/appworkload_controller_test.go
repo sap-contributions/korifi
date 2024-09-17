@@ -101,6 +101,9 @@ var _ = Describe("AppWorkload Reconcile", func() {
 
 		reconciler = controllers.NewAppWorkloadReconciler(
 			fakeClient,
+			fakeClient,
+			nil,
+			nil,
 			scheme.Scheme,
 			fakeWorkloadToStSet,
 			fakePDB,

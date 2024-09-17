@@ -62,7 +62,6 @@ import (
 	jobtaskrunnercontrollers "code.cloudfoundry.org/korifi/job-task-runner/controllers"
 	"code.cloudfoundry.org/korifi/kpack-image-builder/controllers"
 	kpackimagebuilderfinalizer "code.cloudfoundry.org/korifi/kpack-image-builder/controllers/webhooks/finalizer"
-	statefulsetcontrollers "code.cloudfoundry.org/korifi/statefulset-runner/controllers"
 	"code.cloudfoundry.org/korifi/tools"
 	"code.cloudfoundry.org/korifi/tools/image"
 	"code.cloudfoundry.org/korifi/tools/registry"
@@ -395,31 +394,6 @@ func main() {
 			)
 			if err = taskWorkloadReconciler.SetupWithManager(mgr); err != nil {
 				setupLog.Error(err, "unable to create controller", "controller", "TaskWorkload")
-				os.Exit(1)
-			}
-		}
-
-		if controllerConfig.IncludeStatefulsetRunner {
-			if err = statefulsetcontrollers.NewAppWorkloadReconciler(
-				mgr.GetClient(),
-				mgr.GetScheme(),
-				statefulsetcontrollers.NewAppWorkloadToStatefulsetConverter(
-					mgr.GetScheme(),
-					controllerConfig.StatefulsetRunnerTemporarySetPodSeccompProfile,
-				),
-				statefulsetcontrollers.NewPDBUpdater(mgr.GetClient()),
-				controllersLog,
-			).SetupWithManager(mgr); err != nil {
-				setupLog.Error(err, "unable to create controller", "controller", "AppWorkload")
-				os.Exit(1)
-			}
-
-			if err = statefulsetcontrollers.NewRunnerInfoReconciler(
-				mgr.GetClient(),
-				mgr.GetScheme(),
-				controllersLog,
-			).SetupWithManager(mgr); err != nil {
-				setupLog.Error(err, "unable to create controller", "controller", "RunnerInfo")
 				os.Exit(1)
 			}
 		}

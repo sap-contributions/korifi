@@ -73,6 +73,9 @@ var _ = BeforeSuite(func() {
 
 	appWorkloadReconciler := NewAppWorkloadReconciler(
 		k8sManager.GetClient(),
+		k8sManager.GetClient(),
+		nil,
+		nil,
 		k8sManager.GetScheme(),
 		NewAppWorkloadToStatefulsetConverter(k8sManager.GetScheme(), false),
 		NewPDBUpdater(k8sManager.GetClient()),
