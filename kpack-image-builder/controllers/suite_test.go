@@ -119,11 +119,19 @@ var _ = BeforeSuite(func() {
 
 	imageRepoCreator = new(fake.RepositoryCreator)
 	fakeImageConfigGetter = new(fake.ImageConfigGetter)
+	// TODO: use proper values for tests
 	buildWorkloadReconciler = controllers.NewBuildWorkloadReconciler(
 		k8sManager.GetClient(),
+		nil,
+		nil,
+		nil,
 		k8sManager.GetScheme(),
 		ctrl.Log.WithName("kpack-image-builder").WithName("BuildWorkload"),
-		controllerConfig,
+		"",
+		"",
+		0,
+		0,
+		0,
 		fakeImageConfigGetter,
 		"my.repository/my-prefix/",
 		imageRepoCreator,
@@ -135,6 +143,9 @@ var _ = BeforeSuite(func() {
 	Expect(
 		controllers.NewBuilderInfoReconciler(
 			k8sManager.GetClient(),
+			nil,
+			nil,
+			nil,
 			k8sManager.GetScheme(),
 			ctrl.Log.WithName("kpack-image-builder").WithName("BuilderInfo"),
 			clusterBuilderName,

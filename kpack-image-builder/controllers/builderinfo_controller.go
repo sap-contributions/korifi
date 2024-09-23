@@ -26,15 +26,18 @@ import (
 	buildv1alpha2 "github.com/pivotal/kpack/pkg/apis/build/v1alpha2"
 	corev1alpha1 "github.com/pivotal/kpack/pkg/apis/core/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 )
 
 const (
@@ -42,24 +45,33 @@ const (
 )
 
 func NewBuilderInfoReconciler(
-	c client.Client,
+	remoteClient client.Client,
+	localClient client.Client,
+	localCache cache.Cache,
+	localMapper meta.RESTMapper,
 	scheme *runtime.Scheme,
 	log logr.Logger,
 	clusterBuilderName string,
 	rootNamespaceName string,
 ) *k8s.PatchingReconciler[korifiv1alpha1.BuilderInfo, *korifiv1alpha1.BuilderInfo] {
 	builderInfoReconciler := BuilderInfoReconciler{
-		k8sClient:          c,
+		remoteClient:       remoteClient,
+		localClient:        localClient,
+		localCache:         localCache,
+		localMapper:        localMapper,
 		scheme:             scheme,
 		log:                log,
 		clusterBuilderName: clusterBuilderName,
 		rootNamespaceName:  rootNamespaceName,
 	}
-	return k8s.NewPatchingReconciler[korifiv1alpha1.BuilderInfo, *korifiv1alpha1.BuilderInfo](log, c, &builderInfoReconciler)
+	return k8s.NewPatchingReconciler[korifiv1alpha1.BuilderInfo, *korifiv1alpha1.BuilderInfo](log, remoteClient, &builderInfoReconciler)
 }
 
 type BuilderInfoReconciler struct {
-	k8sClient          client.Client
+	remoteClient       client.Client
+	localClient        client.Client
+	localCache         cache.Cache
+	localMapper        meta.RESTMapper
 	scheme             *runtime.Scheme
 	log                logr.Logger
 	clusterBuilderName string
@@ -69,10 +81,7 @@ type BuilderInfoReconciler struct {
 func (r *BuilderInfoReconciler) SetupWithManager(mgr ctrl.Manager) *builder.Builder {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&korifiv1alpha1.BuilderInfo{}).
-		Watches(
-			new(buildv1alpha2.ClusterBuilder),
-			handler.EnqueueRequestsFromMapFunc(r.enqueueBuilderInfoRequests),
-		).
+		WatchesRawSource(source.Kind[client.Object](r.localCache, &buildv1alpha2.ClusterBuilder{}, handler.EnqueueRequestsFromMapFunc(r.enqueueBuilderInfoRequests))).
 		WithEventFilter(predicate.NewPredicateFuncs(r.filterBuilderInfos))
 }
 
@@ -111,7 +120,7 @@ func (r *BuilderInfoReconciler) ReconcileResource(ctx context.Context, info *kor
 	log.V(1).Info("set observed generation", "generation", info.Status.ObservedGeneration)
 
 	clusterBuilder := new(buildv1alpha2.ClusterBuilder)
-	err := r.k8sClient.Get(ctx, types.NamespacedName{Name: r.clusterBuilderName}, clusterBuilder)
+	err := r.localClient.Get(ctx, types.NamespacedName{Name: r.clusterBuilderName}, clusterBuilder)
 	if err != nil {
 		r.log.Info("error when fetching ClusterBuilder", "reason", err)
 
