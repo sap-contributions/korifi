@@ -164,18 +164,23 @@ func (r *AppWorkloadToStatefulsetConverter) Convert(appWorkload *korifiv1alpha1.
 	statefulSet.Spec.Template.Spec.AutomountServiceAccountToken = tools.PtrTo(false)
 	statefulSet.Spec.Selector = statefulSetLabelSelector(appWorkload)
 
-	statefulSet.Spec.Template.Spec.Affinity = &corev1.Affinity{
-		PodAntiAffinity: &corev1.PodAntiAffinity{
-			PreferredDuringSchedulingIgnoredDuringExecution: []corev1.WeightedPodAffinityTerm{
-				{
-					Weight: PodAffinityTermWeight,
-					PodAffinityTerm: corev1.PodAffinityTerm{
-						TopologyKey: corev1.LabelHostname,
-						LabelSelector: &metav1.LabelSelector{
-							MatchExpressions: toLabelSelectorRequirements(statefulSet.Spec.Selector),
-						},
-					},
-				},
+	statefulSet.Spec.Template.Spec.TopologySpreadConstraints = []corev1.TopologySpreadConstraint{
+		{
+			TopologyKey:       "topology.kubernetes.io/zone",
+			MaxSkew:           1,
+			WhenUnsatisfiable: "ScheduleAnyway",
+			LabelSelector:     statefulSet.Spec.Selector,
+			MatchLabelKeys: []string{
+				"pod-template-hash",
+			},
+		},
+		{
+			TopologyKey:       "kubernetes.io/hostname",
+			MaxSkew:           1,
+			WhenUnsatisfiable: "ScheduleAnyway",
+			LabelSelector:     statefulSet.Spec.Selector,
+			MatchLabelKeys: []string{
+				"pod-template-hash",
 			},
 		},
 	}
