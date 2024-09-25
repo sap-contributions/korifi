@@ -104,7 +104,7 @@ var _ = Describe("TaskworkloadController", func() {
 	})
 
 	JustBeforeEach(func() {
-		reconciler := controllers.NewTaskWorkloadReconciler(zap.New(zap.WriteTo(GinkgoWriter), zap.UseDevMode(true)), fakeClient, scheme.Scheme, statusGetter, time.Hour, jobTaskRunnerTemporarySetPodSeccompProfile)
+		reconciler := controllers.NewTaskWorkloadReconciler(zap.New(zap.WriteTo(GinkgoWriter), zap.UseDevMode(true)), fakeClient, fakeClient, nil, nil, scheme.Scheme, statusGetter, time.Hour, jobTaskRunnerTemporarySetPodSeccompProfile)
 		reconcileResult, reconcileErr = reconciler.Reconcile(context.Background(), req)
 	})
 

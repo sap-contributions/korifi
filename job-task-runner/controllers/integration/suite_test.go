@@ -79,6 +79,9 @@ var _ = BeforeSuite(func() {
 	taskWorkloadReconciler := controllers.NewTaskWorkloadReconciler(
 		logger,
 		k8sManager.GetClient(),
+		k8sManager.GetClient(),
+		nil,
+		nil,
 		k8sManager.GetScheme(),
 		controllers.NewStatusGetter(k8sManager.GetClient()),
 		time.Minute,

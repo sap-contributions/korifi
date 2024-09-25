@@ -32,10 +32,14 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 )
 
 const (
@@ -51,7 +55,10 @@ type TaskStatusGetter interface {
 
 // TaskWorkloadReconciler reconciles a TaskWorkload object
 type TaskWorkloadReconciler struct {
-	k8sClient                                  client.Client
+	remoteClient                               client.Client
+	localClient                                client.Client
+	localCache                                 cache.Cache
+	localMapper                                meta.RESTMapper
 	logger                                     logr.Logger
 	scheme                                     *runtime.Scheme
 	statusGetter                               TaskStatusGetter
@@ -61,14 +68,20 @@ type TaskWorkloadReconciler struct {
 
 func NewTaskWorkloadReconciler(
 	logger logr.Logger,
-	k8sClient client.Client,
+	remoteClient client.Client,
+	localClient client.Client,
+	localCache cache.Cache,
+	localMapper meta.RESTMapper,
 	scheme *runtime.Scheme,
 	statusGetter TaskStatusGetter,
 	jobTTL time.Duration,
 	jobTaskRunnerTemporarySetPodSeccompProfile bool,
 ) *k8s.PatchingReconciler[korifiv1alpha1.TaskWorkload, *korifiv1alpha1.TaskWorkload] {
 	taskReconciler := TaskWorkloadReconciler{
-		k8sClient:    k8sClient,
+		remoteClient: remoteClient,
+		localClient:  localClient,
+		localCache:   localCache,
+		localMapper:  localMapper,
 		logger:       logger,
 		scheme:       scheme,
 		statusGetter: statusGetter,
@@ -76,13 +89,13 @@ func NewTaskWorkloadReconciler(
 		jobTaskRunnerTemporarySetPodSeccompProfile: jobTaskRunnerTemporarySetPodSeccompProfile,
 	}
 
-	return k8s.NewPatchingReconciler[korifiv1alpha1.TaskWorkload, *korifiv1alpha1.TaskWorkload](logger, k8sClient, &taskReconciler)
+	return k8s.NewPatchingReconciler[korifiv1alpha1.TaskWorkload, *korifiv1alpha1.TaskWorkload](logger, remoteClient, &taskReconciler)
 }
 
 func (r *TaskWorkloadReconciler) SetupWithManager(mgr ctrl.Manager) *builder.Builder {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&korifiv1alpha1.TaskWorkload{}).
-		Owns(&batchv1.Job{})
+		WatchesRawSource(source.Kind[client.Object](r.localCache, &batchv1.Job{}, handler.EnqueueRequestForOwner(r.scheme, mgr.GetRESTMapper(), &korifiv1alpha1.TaskWorkload{})))
 }
 
 //+kubebuilder:rbac:groups=korifi.cloudfoundry.org,resources=taskworkloads,verbs=get;list;watch;patch
@@ -96,6 +109,21 @@ func (r *TaskWorkloadReconciler) ReconcileResource(ctx context.Context, taskWork
 
 	taskWorkload.Status.ObservedGeneration = taskWorkload.Generation
 	log.V(1).Info("set observed generation", "generation", taskWorkload.Status.ObservedGeneration)
+
+	if err := r.ensureNamespace(ctx, taskWorkload.GetNamespace()); err != nil {
+		log.Info("error when creating namespace", "reason", err)
+		return ctrl.Result{}, err
+	}
+
+	if err := r.ensureServiceAccount(ctx, taskWorkload.GetNamespace(), ServiceAccountName); err != nil {
+		log.Info("error when creating service account", "reason", err)
+		return ctrl.Result{}, err
+	}
+
+	if err := r.synchronizeSecrets(ctx, taskWorkload); err != nil {
+		log.Info("failed to synchronize secrets", "reason", err)
+		return ctrl.Result{}, err
+	}
 
 	job, err := r.getOrCreateJob(ctx, log, taskWorkload)
 	if err != nil {
@@ -117,7 +145,7 @@ func (r *TaskWorkloadReconciler) ReconcileResource(ctx context.Context, taskWork
 func (r TaskWorkloadReconciler) getOrCreateJob(ctx context.Context, logger logr.Logger, taskWorkload *korifiv1alpha1.TaskWorkload) (*batchv1.Job, error) {
 	job := &batchv1.Job{}
 
-	err := r.k8sClient.Get(ctx, client.ObjectKeyFromObject(taskWorkload), job)
+	err := r.remoteClient.Get(ctx, client.ObjectKeyFromObject(taskWorkload), job)
 	if err == nil {
 		return job, nil
 	}
@@ -141,7 +169,7 @@ func (r TaskWorkloadReconciler) createJob(ctx context.Context, logger logr.Logge
 		return nil, err
 	}
 
-	err = r.k8sClient.Create(ctx, job)
+	err = r.localClient.Create(ctx, job)
 	if err != nil {
 		if k8serrors.IsAlreadyExists(err) {
 			logger.V(1).Info("job for TaskWorkload already exists")
@@ -152,6 +180,102 @@ func (r TaskWorkloadReconciler) createJob(ctx context.Context, logger logr.Logge
 	}
 
 	return job, nil
+}
+
+func (r *TaskWorkloadReconciler) ensureServiceAccount(ctx context.Context, namespace, name string) error {
+	res, err := controllerutil.CreateOrPatch(ctx, r.localClient, &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+			Annotations: map[string]string{
+				"cloudfoundry.org/propagate-service-account": "true",
+				"cloudfoundry.org/propagate-deletion":        "false",
+			},
+		},
+	}, nil)
+	if err != nil {
+		return err
+	}
+	r.logger.Info("cf-space namespace reconciled", "name", name, "result", res)
+
+	return nil
+}
+
+func (r *TaskWorkloadReconciler) ensureNamespace(ctx context.Context, name string) error {
+	res, err := controllerutil.CreateOrPatch(ctx, r.localClient, &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+		},
+	}, nil)
+	if err != nil {
+		return err
+	}
+	r.logger.Info("cf-space namespace reconciled", "name", name, "result", res)
+
+	return nil
+}
+
+func (r *TaskWorkloadReconciler) synchronizeSecrets(ctx context.Context, appWorkload *korifiv1alpha1.TaskWorkload) error {
+	for _, s := range appWorkload.Spec.ImagePullSecrets {
+		secret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: appWorkload.GetNamespace(),
+				Name:      s.Name,
+			},
+			Type: corev1.SecretTypeDockerConfigJson,
+		}
+
+		res, err := controllerutil.CreateOrPatch(ctx, r.localClient, secret, func() error {
+			originalSecret := new(corev1.Secret)
+			err := r.remoteClient.Get(ctx, types.NamespacedName{Namespace: appWorkload.GetNamespace(), Name: s.Name}, originalSecret)
+			if err != nil {
+				return err
+			}
+
+			secret.Data = originalSecret.Data
+
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+
+		r.logger.Info("secret reconciled", "namespace", appWorkload.GetNamespace(), "name", s.Name, "result", res)
+	}
+
+	return r.ensureEnvSecrets(ctx, appWorkload.GetNamespace(), appWorkload.Spec.Env)
+}
+
+func (r *TaskWorkloadReconciler) ensureEnvSecrets(ctx context.Context, namespace string, env []corev1.EnvVar) error {
+	for _, e := range env {
+		if e.ValueFrom != nil && e.ValueFrom.SecretKeyRef != nil {
+			secretRef := e.ValueFrom.SecretKeyRef
+			s := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      secretRef.Name,
+					Namespace: namespace,
+				},
+			}
+			res, err := controllerutil.CreateOrPatch(ctx, r.localClient, s, func() error {
+				originalSecret := new(corev1.Secret)
+				if err := r.remoteClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: secretRef.Name}, originalSecret, nil); err != nil {
+					return err
+				}
+
+				s.Data = originalSecret.Data
+				s.Type = originalSecret.Type
+				s.Immutable = originalSecret.Immutable
+
+				return nil
+			})
+			if err != nil {
+				return err
+			}
+
+			r.logger.Info("ensured secret", "namespace", namespace, "name", s.GetName(), "result", res)
+		}
+	}
+	return nil
 }
 
 func WorkloadToJob(
