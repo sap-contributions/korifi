@@ -74,7 +74,7 @@ func main() {
 		},
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
-		LeaderElectionID:       "13c200bs.cloudfoundry.org",
+		LeaderElectionID:       "13c300bs.cloudfoundry.org",
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to initialize manager")
