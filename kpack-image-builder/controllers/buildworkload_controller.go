@@ -283,7 +283,7 @@ func (r *BuildWorkloadReconciler) ReconcileResource(ctx context.Context, buildWo
 		})
 
 		foundServiceAccount := corev1.ServiceAccount{}
-		err = r.remoteClient.Get(ctx, types.NamespacedName{
+		err = r.localClient.Get(ctx, types.NamespacedName{
 			Namespace: buildWorkload.Namespace,
 			Name:      r.builderServiceAccount,
 		}, &foundServiceAccount)
