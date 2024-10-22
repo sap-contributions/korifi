@@ -10,8 +10,6 @@ eksContainerRegistryRoleARN: ""
 containerRegistryCACertSecret:
 systemImagePullSecrets: []
 
-experimentalManagedServicesEnabled: false
-
 reconcilers:
   build: kpack-image-builder
   run: statefulset-runner
@@ -112,7 +110,6 @@ kpackImageBuilder:
 statefulsetRunner:
   include: true
   replicas: 1
-  temporarySetPodSeccompProfile: false
   resources:
     limits:
       cpu: 500m
@@ -124,7 +121,6 @@ statefulsetRunner:
 jobTaskRunner:
   include: true
   replicas: 1
-  temporarySetPodSeccompProfile: false
   resources:
     limits:
       cpu: 500m
@@ -139,9 +135,13 @@ helm:
   hooksImage: alpine/k8s:1.25.2
 
 networking:
+  gatewayPorts:
+    http: 80
+    https: 443
+  gatewayInfrastructure:
   gatewayClass:
 
 experimental:
   managedServices:
-    include: false
+    enabled: false
     trustInsecureBrokers: false

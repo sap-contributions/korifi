@@ -53,14 +53,10 @@ data:
     {{- end }}
     {{- if .Values.jobTaskRunner.include }}
     jobTTL: {{ required "jobTTL is required" .Values.jobTaskRunner.jobTTL }}
-    jobTaskRunnerTemporarySetPodSeccompProfile: {{ .Values.jobTaskRunner.temporarySetPodSeccompProfile }}
-    {{- end }}
-    {{- if .Values.statefulsetRunner.include }}
-    statefulsetRunnerTemporarySetPodSeccompProfile: {{ .Values.statefulsetRunner.temporarySetPodSeccompProfile }}
     {{- end }}
     networking:
       gatewayNamespace: {{ .Release.Namespace }}-gateway
       gatewayName: korifi
-    experimentalManagedServicesEnabled: {{ .Values.experimental.managedServices.include }}
+    experimentalManagedServicesEnabled: {{ .Values.experimental.managedServices.enabled }}
     trustInsecureServiceBrokers: {{ .Values.experimental.managedServices.trustInsecureBrokers }}
 

@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"maps"
 	"regexp"
 	"slices"
 	"sort"
@@ -21,17 +20,12 @@ import (
 )
 
 type AppWorkloadToStatefulsetConverter struct {
-	scheme                                         *runtime.Scheme
-	statefulsetRunnerTemporarySetPodSeccompProfile bool
+	scheme *runtime.Scheme
 }
 
-func NewAppWorkloadToStatefulsetConverter(
-	scheme *runtime.Scheme,
-	statefulsetRunnerTemporarySetPodSeccompProfile bool,
-) *AppWorkloadToStatefulsetConverter {
+func NewAppWorkloadToStatefulsetConverter(scheme *runtime.Scheme) *AppWorkloadToStatefulsetConverter {
 	return &AppWorkloadToStatefulsetConverter{
 		scheme: scheme,
-		statefulsetRunnerTemporarySetPodSeccompProfile: statefulsetRunnerTemporarySetPodSeccompProfile,
 	}
 }
 
@@ -148,6 +142,9 @@ func (r *AppWorkloadToStatefulsetConverter) Convert(appWorkload *korifiv1alpha1.
 					ImagePullSecrets: appWorkload.Spec.ImagePullSecrets,
 					SecurityContext: &corev1.PodSecurityContext{
 						RunAsNonRoot: tools.PtrTo(true),
+						SeccompProfile: &corev1.SeccompProfile{
+							Type: corev1.SeccompProfileTypeRuntimeDefault,
+						},
 					},
 					ServiceAccountName: ServiceAccountName,
 				},
@@ -155,27 +152,26 @@ func (r *AppWorkloadToStatefulsetConverter) Convert(appWorkload *korifiv1alpha1.
 		},
 	}
 
-	if r.statefulsetRunnerTemporarySetPodSeccompProfile {
-		statefulSet.Spec.Template.Spec.SecurityContext.SeccompProfile = &corev1.SeccompProfile{
-			Type: corev1.SeccompProfileTypeRuntimeDefault,
-		}
-	}
-
 	statefulSet.Spec.Template.Spec.AutomountServiceAccountToken = tools.PtrTo(false)
 	statefulSet.Spec.Selector = statefulSetLabelSelector(appWorkload)
 
-	statefulSet.Spec.Template.Spec.Affinity = &corev1.Affinity{
-		PodAntiAffinity: &corev1.PodAntiAffinity{
-			PreferredDuringSchedulingIgnoredDuringExecution: []corev1.WeightedPodAffinityTerm{
-				{
-					Weight: PodAffinityTermWeight,
-					PodAffinityTerm: corev1.PodAffinityTerm{
-						TopologyKey: corev1.LabelHostname,
-						LabelSelector: &metav1.LabelSelector{
-							MatchExpressions: toLabelSelectorRequirements(statefulSet.Spec.Selector),
-						},
-					},
-				},
+	statefulSet.Spec.Template.Spec.TopologySpreadConstraints = []corev1.TopologySpreadConstraint{
+		{
+			TopologyKey:       "topology.kubernetes.io/zone",
+			MaxSkew:           1,
+			WhenUnsatisfiable: "ScheduleAnyway",
+			LabelSelector:     statefulSet.Spec.Selector,
+			MatchLabelKeys: []string{
+				"pod-template-hash",
+			},
+		},
+		{
+			TopologyKey:       "kubernetes.io/hostname",
+			MaxSkew:           1,
+			WhenUnsatisfiable: "ScheduleAnyway",
+			LabelSelector:     statefulSet.Spec.Selector,
+			MatchLabelKeys: []string{
+				"pod-template-hash",
 			},
 		},
 	}
@@ -230,18 +226,6 @@ func truncateString(str string, num int) string {
 	}
 
 	return str
-}
-
-func toLabelSelectorRequirements(selector *metav1.LabelSelector) []metav1.LabelSelectorRequirement {
-	labels := slices.Values(slices.Sorted(maps.Keys(selector.MatchLabels)))
-
-	return slices.Collect(it.Map(labels, func(label string) metav1.LabelSelectorRequirement {
-		return metav1.LabelSelectorRequirement{
-			Key:      label,
-			Operator: metav1.LabelSelectorOpIn,
-			Values:   []string{selector.MatchLabels[label]},
-		}
-	}))
 }
 
 func statefulSetLabelSelector(appWorkload *korifiv1alpha1.AppWorkload) *metav1.LabelSelector {

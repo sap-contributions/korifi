@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/BooleanCat/go-functional/v2/it"
+	"github.com/BooleanCat/go-functional/v2/it/itx"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 )
@@ -17,12 +19,6 @@ func printDocForSchema(schema map[string]any, indentLevel int) {
 	indentStr := strings.Repeat("  ", indentLevel)
 	names := slices.Collect(maps.Keys(schema))
 	sort.Slice(names, func(a, b int) bool {
-		if names[a] == "global" {
-			return true
-		}
-		if names[b] == "global" {
-			return false
-		}
 		return names[a] < names[b]
 	})
 
@@ -33,7 +29,7 @@ func printDocForSchema(schema map[string]any, indentLevel int) {
 			desc = " " + descAny.(string)
 		}
 
-		typeStr := value["type"].(string)
+		typeStr := normalizeType(value["type"])
 		if typeStr == "object" {
 			typeStr = ""
 		} else {
@@ -41,10 +37,30 @@ func printDocForSchema(schema map[string]any, indentLevel int) {
 		}
 
 		fmt.Printf("%s- `%s`%s:%s\n", indentStr, name, typeStr, desc)
-		if value["type"].(string) == "object" {
-			printDocForSchema(value["properties"].(map[string]any), indentLevel+1)
+		if normalizeType(value["type"]) == "object" {
+			properties, hasProperties := value["properties"]
+			if hasProperties {
+				printDocForSchema(properties.(map[string]any), indentLevel+1)
+			}
 		}
 	}
+}
+
+func normalizeType(t any) string {
+	typeString, isString := t.(string)
+	if isString {
+		return typeString
+	}
+
+	typeArr := t.([]any)
+	types := slices.Collect(it.Exclude(itx.FromSlice(typeArr), func(v any) bool {
+		return v == "null"
+	}))
+	if len(types) != 1 {
+		panic(fmt.Errorf("unsupported type: %v", t))
+	}
+
+	return types[0].(string)
 }
 
 func main() {
