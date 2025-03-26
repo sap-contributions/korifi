@@ -21,6 +21,7 @@ import (
 	"github.com/BooleanCat/go-functional/v2/it"
 	"github.com/BooleanCat/go-functional/v2/it/itx"
 	"github.com/google/uuid"
+	authv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -238,25 +239,44 @@ func (m *ListAppsMessage) matches(cfApp korifiv1alpha1.CFApp) bool {
 }
 
 func (f *AppRepo) GetApp(ctx context.Context, authInfo authorization.Info, appGUID string) (AppRecord, error) {
-	ns, err := f.namespaceRetriever.NamespaceFor(ctx, appGUID, AppResourceType)
-	if err != nil {
-		return AppRecord{}, err
-	}
-
 	userClient, err := f.userClientFactory.BuildClient(authInfo)
 	if err != nil {
 		return AppRecord{}, fmt.Errorf("get-app failed to build user client: %w", err)
 	}
 
-	app := &korifiv1alpha1.CFApp{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: ns,
-			Name:      appGUID,
+	app := &korifiv1alpha1.CFApp{}
+	gvks, _, err := scheme.Scheme.ObjectKinds(app)
+	if err != nil {
+		return AppRecord{}, fmt.Errorf("get-app failed to get object kinds: %w", err)
+	}
+
+	mapping, err := userClient.RESTMapper().RESTMapping(gvks[0].GroupKind(), gvks[0].Version)
+	if err != nil {
+		return AppRecord{}, fmt.Errorf("get-app failed to get rest mapping: %w", err)
+	}
+
+	if err = f.namespaceRetriever.GetNamespacedObject(ctx, appGUID, app, mapping.Resource); err != nil {
+		return AppRecord{}, fmt.Errorf("get-app failed to get namespaced object: %w", err)
+	}
+
+	selfSAR := &authv1.SelfSubjectAccessReview{
+		Spec: authv1.SelfSubjectAccessReviewSpec{
+			ResourceAttributes: &authv1.ResourceAttributes{
+				Namespace: app.GetNamespace(),
+				Name:      app.GetName(),
+				Verb:      "get",
+				Resource:  mapping.Resource.Resource,
+				Group:     gvks[0].Group,
+				Version:   gvks[0].Version,
+			},
 		},
 	}
-	err = userClient.Get(ctx, client.ObjectKeyFromObject(app), app)
-	if err != nil {
-		return AppRecord{}, fmt.Errorf("failed to get app: %w", apierrors.FromK8sError(err, AppResourceType))
+	if err = userClient.Create(ctx, selfSAR); err != nil {
+		return AppRecord{}, fmt.Errorf("get-app failed to create access review: %w", err)
+	}
+
+	if !selfSAR.Status.Allowed {
+		return AppRecord{}, apierrors.NewForbiddenError(fmt.Errorf("get-app: user is not allowed to access app %q", appGUID), AppResourceType)
 	}
 
 	return cfAppToAppRecord(*app), nil

@@ -6,7 +6,9 @@ import (
 	"strings"
 
 	apierrors "code.cloudfoundry.org/korifi/api/errors"
+	korifiv1alpha1 "code.cloudfoundry.org/korifi/controllers/api/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 )
@@ -16,71 +18,17 @@ import (
 //+kubebuilder:rbac:groups=korifi.cloudfoundry.org,resources=cfservicebindings;cfserviceinstances,verbs=list
 
 var (
-	CFAppsGVR = schema.GroupVersionResource{
-		Group:    "korifi.cloudfoundry.org",
-		Version:  "v1alpha1",
-		Resource: "cfapps",
-	}
-
-	CFBuildsGVR = schema.GroupVersionResource{
-		Group:    "korifi.cloudfoundry.org",
-		Version:  "v1alpha1",
-		Resource: "cfbuilds",
-	}
-
-	CFDomainsGVR = schema.GroupVersionResource{
-		Group:    "korifi.cloudfoundry.org",
-		Version:  "v1alpha1",
-		Resource: "cfdomains",
-	}
-
-	CFDropletsGVR = schema.GroupVersionResource{
-		Group:    "korifi.cloudfoundry.org",
-		Version:  "v1alpha1",
-		Resource: "cfbuilds",
-	}
-
-	CFPackagesGVR = schema.GroupVersionResource{
-		Group:    "korifi.cloudfoundry.org",
-		Version:  "v1alpha1",
-		Resource: "cfpackages",
-	}
-
-	CFProcessesGVR = schema.GroupVersionResource{
-		Group:    "korifi.cloudfoundry.org",
-		Version:  "v1alpha1",
-		Resource: "cfprocesses",
-	}
-
-	CFRoutesGVR = schema.GroupVersionResource{
-		Group:    "korifi.cloudfoundry.org",
-		Version:  "v1alpha1",
-		Resource: "cfroutes",
-	}
-
-	CFServiceBindingsGVR = schema.GroupVersionResource{
-		Group:    "korifi.cloudfoundry.org",
-		Version:  "v1alpha1",
-		Resource: "cfservicebindings",
-	}
-
-	CFServiceInstancesGVR = schema.GroupVersionResource{
-		Group:    "korifi.cloudfoundry.org",
-		Version:  "v1alpha1",
-		Resource: "cfserviceinstances",
-	}
-
-	CFSpacesGVR = schema.GroupVersionResource{
-		Group:    "korifi.cloudfoundry.org",
-		Version:  "v1alpha1",
-		Resource: "cfspaces",
-	}
-
-	CFTasksGVR = schema.GroupVersionResource{
-		Group:    "korifi.cloudfoundry.org",
-		Version:  "v1alpha1",
-		Resource: "cftasks",
-	}
+	CFAppsGVR             = korifiv1alpha1.Resource("cfapps").WithVersion(korifiv1alpha1.SchemeGroupVersion.Version)
+	CFBuildsGVR           = korifiv1alpha1.Resource("cfbuilds").WithVersion(korifiv1alpha1.SchemeGroupVersion.Version)
+	CFDomainsGVR          = korifiv1alpha1.Resource("cfdomains").WithVersion(korifiv1alpha1.SchemeGroupVersion.Version)
+	CFDropletsGVR         = korifiv1alpha1.Resource("cfdroplets").WithVersion(korifiv1alpha1.SchemeGroupVersion.Version)
+	CFPackagesGVR         = korifiv1alpha1.Resource("cfpackages").WithVersion(korifiv1alpha1.SchemeGroupVersion.Version)
+	CFProcessesGVR        = korifiv1alpha1.Resource("cfprocesses").WithVersion(korifiv1alpha1.SchemeGroupVersion.Version)
+	CFRoutesGVR           = korifiv1alpha1.Resource("cfroutes").WithVersion(korifiv1alpha1.SchemeGroupVersion.Version)
+	CFServiceBindingsGVR  = korifiv1alpha1.Resource("cfservicebindings").WithVersion(korifiv1alpha1.SchemeGroupVersion.Version)
+	CFServiceInstancesGVR = korifiv1alpha1.Resource("cfserviceinstances").WithVersion(korifiv1alpha1.SchemeGroupVersion.Version)
+	CFSpacesGVR           = korifiv1alpha1.Resource("cfspaces").WithVersion(korifiv1alpha1.SchemeGroupVersion.Version)
+	CFTasksGVR            = korifiv1alpha1.Resource("cftasks").WithVersion(korifiv1alpha1.SchemeGroupVersion.Version)
 
 	ResourceMap = map[string]schema.GroupVersionResource{
 		AppResourceType:             CFAppsGVR,
@@ -139,4 +87,25 @@ func (nr NamespaceRetriever) NamespaceFor(ctx context.Context, resourceGUID, res
 	}
 
 	return ns, nil
+}
+
+func (nr NamespaceRetriever) GetNamespacedObject(ctx context.Context, resourceGUID string, obj runtime.Object, resource schema.GroupVersionResource) error {
+	opts := metav1.ListOptions{
+		FieldSelector: fmt.Sprintf("metadata.name=%s", resourceGUID),
+	}
+
+	list, err := nr.client.Resource(resource).List(ctx, opts)
+	if err != nil {
+		return fmt.Errorf("failed to list %v: %w", resource.Resource, apierrors.FromK8sError(err, resource.Resource))
+	}
+
+	if len(list.Items) == 0 {
+		return apierrors.NewNotFoundError(fmt.Errorf("resource %q not found", resourceGUID), resource.Resource)
+	}
+
+	if len(list.Items) > 1 {
+		return fmt.Errorf("get-%s duplicate records exist", strings.ToLower(resource.Resource))
+	}
+
+	return runtime.DefaultUnstructuredConverter.FromUnstructured(list.Items[0].Object, obj)
 }
