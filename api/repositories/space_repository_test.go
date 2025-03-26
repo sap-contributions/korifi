@@ -24,7 +24,6 @@ import (
 
 var _ = Describe("SpaceRepository", func() {
 	var (
-		orgRepo          *repositories.OrgRepo
 		conditionAwaiter *fakeawaiter.FakeAwaiter[
 			*korifiv1alpha1.CFSpace,
 			korifiv1alpha1.CFSpace,
@@ -35,20 +34,13 @@ var _ = Describe("SpaceRepository", func() {
 	)
 
 	BeforeEach(func() {
-		orgRepo = repositories.NewOrgRepo(rootNamespace, k8sClient, userClientFactory, nsPerms, &fakeawaiter.FakeAwaiter[
-			*korifiv1alpha1.CFOrg,
-			korifiv1alpha1.CFOrg,
-			korifiv1alpha1.CFOrgList,
-			*korifiv1alpha1.CFOrgList,
-		]{})
-
 		conditionAwaiter = &fakeawaiter.FakeAwaiter[
 			*korifiv1alpha1.CFSpace,
 			korifiv1alpha1.CFSpace,
 			korifiv1alpha1.CFSpaceList,
 			*korifiv1alpha1.CFSpaceList,
 		]{}
-		spaceRepo = repositories.NewSpaceRepo(namespaceRetriever, orgRepo, userClientFactory, nsPerms, conditionAwaiter)
+		spaceRepo = repositories.NewSpaceRepo(namespaceRetriever, userClientFactory, nsPerms, conditionAwaiter)
 	})
 
 	Describe("CreateSpace", func() {

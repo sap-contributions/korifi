@@ -2,6 +2,7 @@ package tools
 
 import (
 	"cmp"
+	"maps"
 	"reflect"
 	"slices"
 )
@@ -49,4 +50,20 @@ func GetMapValue[K comparable, V any](m map[K]V, key K, defaultValue V) V {
 		return value
 	}
 	return defaultValue
+}
+
+func MergeMaps[M ~map[K]V, K comparable, V any](a, b M) M {
+	if len(a) == 0 {
+		return b
+	}
+
+	if len(b) == 0 {
+		return a
+	}
+
+	merged := make(M, max(len(a), len(b)))
+	maps.Copy(merged, a)
+	maps.Copy(merged, b)
+
+	return merged
 }

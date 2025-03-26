@@ -22,6 +22,7 @@ var _ = Describe("Space", func() {
 	var (
 		apiHandler       *handlers.Space
 		spaceRepo        *fake.CFSpaceRepository
+		orgRepo          *fake.CFOrgRepository
 		requestValidator *fake.RequestValidator
 		requestMethod    string
 		requestPath      string
@@ -37,10 +38,12 @@ var _ = Describe("Space", func() {
 			GUID:             "the-space-guid",
 			OrganizationGUID: "the-org-guid",
 		}, nil)
+		orgRepo = new(fake.CFOrgRepository)
 
 		apiHandler = handlers.NewSpace(
 			*serverURL,
 			spaceRepo,
+			orgRepo,
 			requestValidator,
 		)
 		routerBuilder.LoadRoutes(apiHandler)

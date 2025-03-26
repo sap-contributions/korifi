@@ -17,6 +17,7 @@ import (
 	"code.cloudfoundry.org/korifi/api/routing"
 	"code.cloudfoundry.org/korifi/api/tools/singleton"
 	korifiv1alpha1 "code.cloudfoundry.org/korifi/controllers/api/v1alpha1"
+	"code.cloudfoundry.org/korifi/tools"
 
 	"github.com/go-logr/logr"
 )
@@ -133,7 +134,7 @@ func (h *App) create(r *http.Request) (*routing.Response, error) {
 	}
 
 	spaceGUID := payload.Relationships.Space.Data.GUID
-	_, err := h.spaceRepo.GetSpace(r.Context(), authInfo, spaceGUID)
+	space, err := h.spaceRepo.GetSpace(r.Context(), authInfo, spaceGUID)
 	if err != nil {
 		return nil, apierrors.LogAndReturn(
 			logger,
@@ -142,6 +143,7 @@ func (h *App) create(r *http.Request) (*routing.Response, error) {
 		)
 	}
 
+	payload.Metadata.Labels = tools.MergeMaps(space.Labels, payload.Metadata.Labels)
 	appRecord, err := h.appRepo.CreateApp(r.Context(), authInfo, payload.ToAppCreateMessage())
 	if err != nil {
 		return nil, apierrors.LogAndReturn(logger, err, "Failed to create app", "App Name", payload.Name)

@@ -10,6 +10,7 @@ import (
 	"code.cloudfoundry.org/korifi/api/payloads"
 	"code.cloudfoundry.org/korifi/api/presenter"
 	"code.cloudfoundry.org/korifi/api/routing"
+	"code.cloudfoundry.org/korifi/tools"
 
 	"code.cloudfoundry.org/korifi/api/repositories"
 	"github.com/go-logr/logr"
@@ -103,6 +104,7 @@ func (h *Task) create(r *http.Request) (*routing.Response, error) {
 		)
 	}
 
+	payload.Metadata.Labels = tools.MergeMaps(appRecord.Labels, payload.Metadata.Labels)
 	taskRecord, err := h.taskRepo.CreateTask(r.Context(), authInfo, payload.ToMessage(appRecord))
 	if err != nil {
 		return nil, apierrors.LogAndReturn(logger, err, "failed to create task")

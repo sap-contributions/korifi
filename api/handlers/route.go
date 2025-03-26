@@ -11,6 +11,7 @@ import (
 	"code.cloudfoundry.org/korifi/api/presenter"
 	"code.cloudfoundry.org/korifi/api/repositories"
 	"code.cloudfoundry.org/korifi/api/routing"
+	"code.cloudfoundry.org/korifi/tools"
 
 	"github.com/go-logr/logr"
 )
@@ -117,7 +118,7 @@ func (h *Route) create(r *http.Request) (*routing.Response, error) {
 	}
 
 	spaceGUID := payload.Relationships.Space.Data.GUID
-	_, err := h.spaceRepo.GetSpace(r.Context(), authInfo, spaceGUID)
+	space, err := h.spaceRepo.GetSpace(r.Context(), authInfo, spaceGUID)
 	if err != nil {
 		return nil, apierrors.LogAndReturn(
 			logger,
@@ -132,8 +133,7 @@ func (h *Route) create(r *http.Request) (*routing.Response, error) {
 		)
 	}
 
-	domainGUID := payload.Relationships.Domain.Data.GUID
-	domain, err := h.domainRepo.GetDomain(r.Context(), authInfo, domainGUID)
+	domain, err := h.domainRepo.GetDomain(r.Context(), authInfo, payload.Relationships.Domain.Data.GUID)
 	if err != nil {
 		return nil, apierrors.LogAndReturn(logger,
 			apierrors.AsUnprocessableEntity(
@@ -146,6 +146,7 @@ func (h *Route) create(r *http.Request) (*routing.Response, error) {
 		)
 	}
 
+	payload.Metadata.Labels = tools.MergeMaps(tools.MergeMaps(space.Labels, domain.Labels), payload.Metadata.Labels)
 	createRouteMessage := payload.ToMessage(domain.Namespace, domain.Name)
 	responseRouteRecord, err := h.routeRepo.CreateRoute(r.Context(), authInfo, createRouteMessage)
 	if err != nil {

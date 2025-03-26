@@ -284,9 +284,9 @@ func (f *AppRepo) CreateApp(ctx context.Context, authInfo authorization.Info, ap
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      cfApp.Spec.EnvSecretName,
 			Namespace: cfApp.Namespace,
-			Labels: map[string]string{
+			Labels: tools.MergeMaps(appCreateMessage.Labels, map[string]string{
 				CFAppGUIDLabel: cfApp.Name,
-			},
+			}),
 		},
 		StringData: appCreateMessage.EnvironmentVariables,
 	}

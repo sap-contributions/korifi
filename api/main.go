@@ -145,7 +145,6 @@ func main() {
 	)
 	spaceRepo := repositories.NewSpaceRepo(
 		namespaceRetriever,
-		orgRepo,
 		userClientFactoryUnfiltered,
 		nsPermissions,
 		conditions.NewConditionAwaiter[*korifiv1alpha1.CFSpace, korifiv1alpha1.CFSpace, korifiv1alpha1.CFSpaceList](conditionTimeout),
@@ -434,6 +433,7 @@ func main() {
 		handlers.NewSpace(
 			*serverURL,
 			spaceRepo,
+			orgRepo,
 			requestValidator,
 		),
 		handlers.NewSpaceManifest(

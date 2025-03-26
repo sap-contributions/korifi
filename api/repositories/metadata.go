@@ -1,6 +1,8 @@
 package repositories
 
-import "sigs.k8s.io/controller-runtime/pkg/client"
+import (
+	"sigs.k8s.io/controller-runtime/pkg/client"
+)
 
 type Metadata struct {
 	Annotations map[string]string

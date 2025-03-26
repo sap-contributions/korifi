@@ -25,6 +25,7 @@ import (
 	korifiv1alpha1 "code.cloudfoundry.org/korifi/controllers/api/v1alpha1"
 	"code.cloudfoundry.org/korifi/controllers/api/v1alpha1/status"
 	"code.cloudfoundry.org/korifi/controllers/controllers/shared"
+	"code.cloudfoundry.org/korifi/tools"
 	"code.cloudfoundry.org/korifi/tools/k8s"
 
 	"github.com/go-logr/logr"
@@ -110,7 +111,8 @@ func (r *Reconciler[T, NS]) createOrPatchNamespace(ctx context.Context, obj NS) 
 
 	namespace := &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: obj.GetName(),
+			Name:   obj.GetName(),
+			Labels: obj.GetLabels(),
 		},
 	}
 
@@ -165,7 +167,7 @@ func (r *Reconciler[T, NS]) propagateSecrets(ctx context.Context, obj NS, secret
 
 		result, err := controllerutil.CreateOrPatch(ctx, r.client, newSecret, func() error {
 			newSecret.Annotations = removePackageManagerKeys(secret.Annotations, looplog)
-			newSecret.Labels = removePackageManagerKeys(secret.Labels, looplog)
+			newSecret.Labels = tools.MergeMaps(obj.GetLabels(), removePackageManagerKeys(secret.Labels, looplog))
 			newSecret.Immutable = secret.Immutable
 			newSecret.Data = secret.Data
 			newSecret.Type = secret.Type
@@ -229,6 +231,7 @@ func (r *Reconciler[T, NS]) reconcileRoleBindings(ctx context.Context, obj NS) e
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      binding.Name,
 					Namespace: obj.GetName(),
+					Labels:    obj.GetLabels(),
 				},
 			}
 

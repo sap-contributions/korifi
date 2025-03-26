@@ -24,6 +24,7 @@ import (
 	korifiv1alpha1 "code.cloudfoundry.org/korifi/controllers/api/v1alpha1"
 	"code.cloudfoundry.org/korifi/controllers/config"
 	"code.cloudfoundry.org/korifi/controllers/controllers/workloads/build"
+	"code.cloudfoundry.org/korifi/tools"
 	"code.cloudfoundry.org/korifi/tools/k8s"
 
 	"github.com/BooleanCat/go-functional/v2/it"
@@ -214,10 +215,10 @@ func (r *buildpackBuildReconciler) createBuildWorkload(ctx context.Context, cfBu
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      cfBuild.Name,
 			Namespace: namespace,
-			Labels: map[string]string{
+			Labels: tools.MergeMaps(cfApp.Labels, map[string]string{
 				korifiv1alpha1.CFBuildGUIDLabelKey: cfBuild.Name,
 				korifiv1alpha1.CFAppGUIDLabelKey:   cfApp.Name,
-			},
+			}),
 		},
 		Spec: korifiv1alpha1.BuildWorkloadSpec{
 			BuildRef: korifiv1alpha1.RequiredLocalObjectReference{

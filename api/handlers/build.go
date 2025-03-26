@@ -12,6 +12,7 @@ import (
 	"code.cloudfoundry.org/korifi/api/presenter"
 	"code.cloudfoundry.org/korifi/api/repositories"
 	"code.cloudfoundry.org/korifi/api/routing"
+	"code.cloudfoundry.org/korifi/tools"
 
 	"github.com/go-logr/logr"
 )
@@ -100,6 +101,7 @@ func (h *Build) create(r *http.Request) (*routing.Response, error) {
 		)
 	}
 
+	payload.Metadata.Labels = tools.MergeMaps(appRecord.Labels, payload.Metadata.Labels)
 	buildCreateMessage := payload.ToMessage(appRecord)
 
 	record, err := h.buildRepo.CreateBuild(r.Context(), authInfo, buildCreateMessage)

@@ -75,7 +75,6 @@ func (r SpaceRecord) Relationships() map[string]string {
 }
 
 type SpaceRepo struct {
-	orgRepo            *OrgRepo
 	namespaceRetriever NamespaceRetriever
 	userClientFactory  authorization.UserClientFactory
 	nsPerms            *authorization.NamespacePermissions
@@ -84,13 +83,11 @@ type SpaceRepo struct {
 
 func NewSpaceRepo(
 	namespaceRetriever NamespaceRetriever,
-	orgRepo *OrgRepo,
 	userClientFactory authorization.UserClientFactory,
 	nsPerms *authorization.NamespacePermissions,
 	conditionAwaiter Awaiter[*korifiv1alpha1.CFSpace],
 ) *SpaceRepo {
 	return &SpaceRepo{
-		orgRepo:            orgRepo,
 		namespaceRetriever: namespaceRetriever,
 		userClientFactory:  userClientFactory,
 		nsPerms:            nsPerms,
@@ -99,11 +96,6 @@ func NewSpaceRepo(
 }
 
 func (r *SpaceRepo) CreateSpace(ctx context.Context, info authorization.Info, message CreateSpaceMessage) (SpaceRecord, error) {
-	_, err := r.orgRepo.GetOrg(ctx, info, message.OrganizationGUID)
-	if err != nil {
-		return SpaceRecord{}, fmt.Errorf("failed to get parent organization: %w", err)
-	}
-
 	userClient, err := r.userClientFactory.BuildClient(info)
 	if err != nil {
 		return SpaceRecord{}, fmt.Errorf("failed to build user client: %w", err)

@@ -289,10 +289,10 @@ func (r *Reconciler) createCFProcess(ctx context.Context, process korifiv1alpha1
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: cfApp.Namespace,
 			Name:      tools.NamespacedUUID(cfApp.Name, process.Type),
-			Labels: map[string]string{
+			Labels: tools.MergeMaps(cfApp.Labels, map[string]string{
 				korifiv1alpha1.CFAppGUIDLabelKey:     cfApp.Name,
 				korifiv1alpha1.CFProcessTypeLabelKey: process.Type,
-			},
+			}),
 		},
 		Spec: korifiv1alpha1.CFProcessSpec{
 			AppRef:          corev1.LocalObjectReference{Name: cfApp.Name},
@@ -460,6 +460,7 @@ func (r *Reconciler) reconcileVCAPSecret(
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      secretName,
 			Namespace: cfApp.Namespace,
+			Labels:    cfApp.Labels,
 		},
 	}
 

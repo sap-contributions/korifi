@@ -24,6 +24,7 @@ import (
 	"code.cloudfoundry.org/korifi/controllers/controllers/shared"
 	"code.cloudfoundry.org/korifi/controllers/controllers/workloads/k8sns"
 	"code.cloudfoundry.org/korifi/controllers/controllers/workloads/labels"
+	"code.cloudfoundry.org/korifi/tools"
 	"code.cloudfoundry.org/korifi/tools/k8s"
 
 	"github.com/go-logr/logr"
@@ -202,7 +203,7 @@ func (r *Reconciler) reconcileServiceAccounts(ctx context.Context, space client.
 			result, err = controllerutil.CreateOrPatch(ctx, r.client, spaceServiceAccount, func() error {
 				spaceServiceAccount.Annotations = shared.RemovePackageManagerKeys(rootServiceAccount.Annotations, loopLog)
 
-				spaceServiceAccount.Labels = shared.RemovePackageManagerKeys(rootServiceAccount.Labels, loopLog)
+				spaceServiceAccount.Labels = tools.MergeMaps(space.GetLabels(), shared.RemovePackageManagerKeys(rootServiceAccount.Labels, loopLog))
 				if spaceServiceAccount.Labels == nil {
 					spaceServiceAccount.Labels = map[string]string{}
 				}

@@ -255,6 +255,7 @@ func (r *Reconciler) createOrPatchTaskWorkload(ctx context.Context, cfTask *kori
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      cfTask.Name,
 			Namespace: cfTask.Namespace,
+			Labels:    cfTask.Labels,
 		},
 	}
 

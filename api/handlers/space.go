@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/url"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"code.cloudfoundry.org/korifi/api/presenter"
 	"code.cloudfoundry.org/korifi/api/repositories"
 	"code.cloudfoundry.org/korifi/api/routing"
+	"code.cloudfoundry.org/korifi/tools"
 
 	"github.com/go-logr/logr"
 )
@@ -34,14 +36,16 @@ type CFSpaceRepository interface {
 
 type Space struct {
 	spaceRepo        CFSpaceRepository
+	orgRepo          CFOrgRepository
 	apiBaseURL       url.URL
 	requestValidator RequestValidator
 }
 
-func NewSpace(apiBaseURL url.URL, spaceRepo CFSpaceRepository, requestValidator RequestValidator) *Space {
+func NewSpace(apiBaseURL url.URL, spaceRepo CFSpaceRepository, orgRepo CFOrgRepository, requestValidator RequestValidator) *Space {
 	return &Space{
 		apiBaseURL:       apiBaseURL,
 		spaceRepo:        spaceRepo,
+		orgRepo:          orgRepo,
 		requestValidator: requestValidator,
 	}
 }
@@ -55,12 +59,18 @@ func (h *Space) create(r *http.Request) (*routing.Response, error) {
 		return nil, apierrors.LogAndReturn(logger, err, "Failed to decode and validate payload")
 	}
 
+	org, err := h.orgRepo.GetOrg(r.Context(), authInfo, payload.Relationships.Org.Data.GUID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get parent organization: %w", err)
+	}
+
+	payload.Metadata.Labels = tools.MergeMaps(org.Labels, payload.Metadata.Labels)
 	space := payload.ToMessage()
 	record, err := h.spaceRepo.CreateSpace(r.Context(), authInfo, space)
 	if err != nil {
 		return nil, apierrors.LogAndReturn(
 			logger,
-			apierrors.AsUnprocessableEntity(err, "Invalid organization. Ensure the organization exists and you have access to it.", apierrors.NotFoundError{}),
+			err,
 			"Failed to create space",
 			"Space Name", space.Name,
 		)
